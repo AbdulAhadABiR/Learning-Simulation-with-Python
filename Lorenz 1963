@@ -1,0 +1,32 @@
+import numpy as np
+import matplotlib.pyplot as plt
+sigma=10
+beta=8/3
+rho=28
+def rk4singlestep(fun,dt,t0,y0):
+    f1=fun(t0,y0)
+    f2=fun(t0+dt/2,y0+(dt/2)*f1)
+    f3=fun(t0+dt/2,y0+(dt/2)*f2)
+    f4=fun(t0+dt,y0+dt*f3)
+    yout=y0+(dt/6)*(f1+2*f2+2*f3+f4)
+    return yout
+
+def lorenz(t,y):
+    dy=[sigma*(y[1]-y[0]),
+        y[0]*(rho-y[2])-y[1],
+       y[0]*y[1]-beta*y[2]]
+    return np.array(dy)
+
+y0=[-8,8,27]
+t=np.linspace(1,10,10000)
+dt=(t[-1]-t[0])/(len(t)-1)
+Y=np.zeros([3,len(t)])
+Y[:,0]=y0
+yin=y0
+for k in range(len(t)-1):
+    yout=rk4singlestep(lorenz,dt,t[k],yin)
+    Y[:,k+1]=yout
+    yin=yout
+ax=plt.figure().add_subplot(projection='3d')
+ax.plot(Y[0,:],Y[1,:],Y[2,:])
+plt.show()
