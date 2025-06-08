@@ -1,0 +1,117 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
+from numba import njit
+import os
+from multiprocessing import Pool
+import time
+import datetime
+
+# ---- CONFIGURATION ----
+width, height = 1920, 1080
+frames = 2000
+zoom_center = (-0.743643887037151, 0.13182590420533)
+zoom_scale = 0.98
+output_dir = "frames"
+
+os.makedirs(output_dir, exist_ok=True)
+
+# ---- CONTRASTED COLOR PALETTE ----
+colors = [
+    "#1b1b3a", "#3a0ca3", "#4361ee", "#4cc9f0", "#b9fbc0",
+    "#f9c74f", "#f8961e", "#f94144", "#720026"
+]
+custom_cmap = LinearSegmentedColormap.from_list("julia", colors, N=2048)
+
+@njit(parallel=True, fastmath=True)
+def mandelbrot_smooth(xmin, xmax, ymin, ymax, width, height, max_iter):
+    image = np.zeros((height, width), dtype=np.float64)
+    for row in range(height):
+        for col in range(width):
+            x0 = xmin + col * (xmax - xmin) / width
+            y0 = ymin + row * (ymax - ymin) / height
+            x, y = 0.0, 0.0
+            iteration = 0
+            while x*x + y*y <= 4.0 and iteration < max_iter:
+                xtemp = x*x - y*y + x0
+                y = 2.0*x*y + y0
+                x = xtemp
+                iteration += 1
+            if iteration < max_iter:
+                log_zn = np.log(x*x + y*y) / 2
+                nu = np.log(log_zn / np.log(2)) / np.log(2)
+                iteration = iteration + 1 - nu
+            image[row, col] = iteration
+    return image
+
+def dynamic_max_iter(frame_idx, base=300, scale=1.05, cap=5000):
+    return min(int(base * (scale ** frame_idx)), cap)
+
+def histogram_equalization(norm_data):
+    flat = norm_data.flatten()
+    hist, bins = np.histogram(flat, bins=2048, range=(0.0, 1.0), density=True)
+    cdf = hist.cumsum()
+    cdf = (cdf - cdf.min()) / (cdf.max() - cdf.min())
+    equalized = np.interp(flat, bins[:-1], cdf)
+    return equalized.reshape(norm_data.shape)
+
+def render_frame(frame):
+    scale = zoom_scale ** frame
+    span_x = 3 * scale
+    span_y = 3 * scale * (height / width)
+    xmin = zoom_center[0] - span_x / 2
+    xmax = zoom_center[0] + span_x / 2
+    ymin = zoom_center[1] - span_y / 2
+    ymax = zoom_center[1] + span_y / 2
+    max_iter = dynamic_max_iter(frame)
+
+    filename = f"{output_dir}/frame_{frame:04d}.png"
+    if os.path.exists(filename):
+        return frame
+
+    data = mandelbrot_smooth(xmin, xmax, ymin, ymax, width, height, max_iter)
+
+    log_data = np.log1p(data)
+    norm_data = log_data / np.max(log_data)
+
+    norm_data = np.power(norm_data, 0.8)
+    norm_data = histogram_equalization(norm_data)
+
+    fig, ax = plt.subplots(figsize=(width / 100, height / 100), dpi=100)
+    ax.imshow(norm_data, extent=(xmin, xmax, ymin, ymax), cmap=custom_cmap, vmin=0, vmax=1)
+    ax.axis('off')
+    plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
+    plt.savefig(filename, dpi=100, bbox_inches='tight', pad_inches=0)
+    plt.close(fig)
+
+    return frame
+
+if __name__ == "__main__":
+    print(f"🌀 Starting frame rendering...")
+
+    start_time = time.time()
+    completed_frames = 0
+
+    existing_frames = {
+        int(f.split("_")[1].split(".")[0])
+        for f in os.listdir(output_dir)
+        if f.startswith("frame_") and f.endswith(".png")
+    }
+
+    frames_to_render = [i for i in range(frames) if i not in existing_frames]
+    total_remaining = len(frames_to_render)
+
+    print(f"🔍 Found {len(existing_frames)} frames already rendered.")
+    print(f"▶️ Rendering {total_remaining} remaining frames...\n")
+
+    with Pool() as pool:
+        for _ in pool.imap_unordered(render_frame, frames_to_render):
+            completed_frames += 1
+            elapsed = time.time() - start_time
+            avg_time = elapsed / completed_frames
+            eta = (total_remaining - completed_frames) * avg_time
+            elapsed_str = str(datetime.timedelta(seconds=int(elapsed)))
+            eta_str = str(datetime.timedelta(seconds=int(eta)))
+            print(f"\r✅ Frame {completed_frames}/{total_remaining} — Elapsed: {elapsed_str} — ETA: {eta_str}", end="")
+
+    print("\n✅ All frames rendered.")
